@@ -1,133 +1,280 @@
 <?php
 /*
-Plugin Name: Nginx Champuru
-Author: Takayuki Miyauchi
-Plugin URI: http://firegoby.theta.ne.jp/wp/nginx-champuru
-Description: Plugin for Nginx Reverse Proxy 
-Version: 0.4.0
-Author URI: http://firegoby.theta.ne.jp/
+Plugin Name: Nginx Cache Controller
+Author: Ninjax Team (Takayuki Miyauchi)
+Plugin URI: http://ninjax.cc/
+Description: Plugin for Nginx Reverse Proxy
+Version: 1.1.0
+Author URI: http://ninjax.cc/
 Domain Path: /languages
-Text Domain: nginx-champuru
+Text Domain: nginxchampuru
 */
 
-require_once(dirname(__FILE__).'/includes/class-addrewriterules.php');
+$nginxchampuru = new NginxChampuru();
+register_activation_hook (__FILE__, array($nginxchampuru, 'activation'));
 
-new NginxChampuru();
-register_activation_hook(__FILE__, 'flush_rewrite_rules');
+require_once(dirname(__FILE__)."/includes/caching.class.php");
+new NginxChampuru_Caching();
+require_once(dirname(__FILE__)."/includes/flush-cache.class.php");
+new NginxChampuru_FlushCache();
+require_once(dirname(__FILE__)."/includes/admin.class.php");
+new NginxChampuru_Admin();
 
 class NginxChampuru {
 
-private $js_version = "0.2.0";
-private $query = "nginxchampuru";
-private $cache_dir = '/var/cache/nginx';
+private $table;
+private $expire = 86400;
+private $cache_dir = "/var/cache/nginx";
+private $cache_levels = "1:2";
+private $transient_timeout = 60;
+
+// hook and flush mode
+private $method =array(
+    'publish' => 'almost',
+    'comment' => 'single',
+);
 
 function __construct()
 {
-    new WP_AddRewriteRules(
-        'nginx-champuru.json$',
-        $this->query,
-        array(&$this, 'get_commenter_json')
-    );
-    add_action("wp", array(&$this, "wp"));
-    add_action(
-        'wp_enqueue_scripts',
-        array(&$this, 'wp_enqueue_scripts')
-    );
-    add_filter(
-        "wp_get_current_commenter",
-        array(&$this, "wp_get_current_commenter"),
-        9999
-    );
-    add_action("publish_future_post ", array(&$this, "flush_caches"));
-    add_action("save_post", array(&$this, "flush_caches"));
-    add_action("comment_post", array(&$this, "flush_caches"));
-    add_action("wp_set_comment_status", array(&$this, "flush_caches"));
-    add_filter("got_rewrite", "__return_true");
-    add_filter("pre_comment_user_ip", array(&$this, "pre_comment_user_ip"));
+    global $wpdb;
+    $this->table = $wpdb->prefix.'nginxchampuru';
+    add_action('plugins_loaded',    array(&$this, 'plugins_loaded'));
 }
 
-public function pre_comment_user_ip()
+public function is_enable_flush()
 {
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        $X_FORWARDED_FOR = explode(",", $_SERVER['HTTP_X_FORWARDED_FOR']);
-        $REMOTE_ADDR = trim($X_FORWARDED_FOR[0]);
+    return get_option("nginxchampuru-enable_flush", 0);
+}
+
+public function get_cache_levels()
+{
+    return get_option("nginxchampuru-cache_levels", $this->cache_levels);
+}
+
+public function get_flush_method($hook)
+{
+    return get_option(
+        'nginxchampuru-'.$hook,
+        $this->method[$hook]
+    );
+}
+
+public function get_default_expire()
+{
+    return $this->expire;
+}
+
+public function get_plugin_url()
+{
+    return plugins_url('', __FILE__);
+}
+
+public function get_plugin_dir()
+{
+    return dirname(__FILE__);
+}
+
+public function plugins_loaded()
+{
+    load_plugin_textdomain(
+        "nginxchampuru",
+        false,
+        dirname(plugin_basename(__FILE__)).'/languages'
+    );
+}
+
+public function add()
+{
+    if (is_admin()) {
+        return;
+    }
+    global $wpdb;
+    $sql = $wpdb->prepare(
+        "replace into `{$this->table}` values(%s, %d, %s)",
+        $this->get_cache_key(),
+        $this->get_postid(),
+        $this->get_post_type()
+    );
+    $wpdb->query($sql);
+}
+
+public function transientExec($callback)
+{
+    if (!$this->is_enable_flush()) {
+        return;
+    }
+
+    if (get_transient("nginxchampuru_flush")) {
+        return;
     } else {
-        $REMOTE_ADDR = $_SERVER['REMOTE_ADDR'];
+        set_transient("nginxchampuru_flush", 1, $this->transient_timeout);
     }
-    return $REMOTE_ADDR;
+
+    $params = func_get_args();
+    array_shift($params);
+    call_user_func(array(&$this, $callback), $params);
+
+    delete_transient("nginxchampuru_flush");
 }
 
-public function flush_caches()
+private function flush_this()
 {
-    if (defined("NGINX_DELETE_CACHES") && NGINX_DELETE_CACHES) {
-        if (defined("NGINX_CACHE_DIR") && NGINX_CACHE_DIR) {
-            $this->cache_dir = NGINX_CACHE_DIR;
-        }
-        $cmd = sprintf(
-            'grep -lr %s %s | xargs rm -f &> /dev/null &',
-            escapeshellarg(home_url()),
-            escapeshellarg($this->cache_dir)
+    $params = func_get_args();
+    $url    = $params[0][0];
+
+    $key    = $this->get_cache_key($url);
+    $cache  = $this->get_cache($key);
+
+    if (is_file($cache)) {
+        unlink($cache);
+    }
+
+    global $wpdb;
+    $sql = $wpdb->prepare(
+        "delete from `$this->table` where cache_key=%s",
+        $key
+    );
+}
+
+private function flush_cache()
+{
+    $params = func_get_args();
+    $mode   = $params[0][0];
+    $id     = $params[0][1];
+
+    global $wpdb;
+    if ($mode === "all") {
+        $sql = "select `cache_key` from `$this->table`";
+    } elseif ($mode === "single" && intval($id)) {
+        $sql = $wpdb->prepare(
+            "select `cache_key` from `$this->table` where cache_id=%d",
+            intval($id)
         );
-        exec($cmd);
-    }
-}
-
-public function wp()
-{
-    global $post;
-    if (is_singular() && post_password_required($post->ID)) {
-        nocache_headers();
-    }
-}
-
-public function wp_enqueue_scripts()
-{
-    if ((is_singular() && comments_open()) || $this->is_future_post()) {
-        wp_enqueue_script(
-            'nginx-champuru',
-            plugins_url('/nginx-champuru.js', __FILE__),
-            array('jquery'),
-            $this->js_version,
-            true
+    } elseif ($mode === 'almost' && intval($id)) {
+        $sql = $wpdb->prepare(
+            "select `cache_key` from `$this->table`
+                where cache_id=%d or
+                cache_type in ('is_home', 'is_archive', 'other')",
+            intval($id)
         );
-    }
-}
-
-public function get_commenter_json()
-{
-    nocache_headers();
-    header('Content-type: application/json');
-    echo json_encode(wp_get_current_commenter());
-    exit;
-}
-
-public function wp_get_current_commenter($commenter)
-{
-    if (get_query_var($this->query)) {
-        return $commenter;
     } else {
-        return array(
-            'comment_author'       => '',
-            'comment_author_email' => '',
-            'comment_author_url'   => '',
-        );
+        return;
     }
-}
 
-private function is_future_post()
-{
-    $cron = get_option("cron");
-    foreach ($cron as $key => $jobs) {
-        if (is_array($jobs)) {
-            $res = array_key_exists("publish_future_post", $jobs);
-            if ($res) {
-                return true;
-            }
+    $keys = $wpdb->get_col($sql);
+    foreach ($keys as $key) {
+        $cache = $this->get_cache($key);
+        if (is_file($cache)) {
+            unlink($cache);
         }
     }
-    return false;
+
+    $sql = "delete from `$this->table` where cache_key in ('".join("','", $keys)."')";
+    $wpdb->query($sql);
+}
+
+public function activation()
+{
+    global $wpdb;
+    if ($wpdb->get_var("show tables like '$this->table'") != $this->table) {
+        $sql = "CREATE TABLE `{$this->table}` (
+            `cache_key` varchar(32) not null,
+            `cache_id` bigint(20) unsigned default 0 not null,
+            `cache_type` varchar(11) not null,
+            primary key (`cache_key`),
+            key `cache_id` (`cache_id`),
+            key `cache_type`(`cache_type`)
+            );";
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+}
+
+public function get_expire()
+{
+    $expires = get_option("nginxchampuru-cache_expires");
+    $par = $this->get_post_type();
+    if (isset($expires[$par]) && strlen($expires[$par])) {
+        return $expires[$par];
+    } else {
+        return $this->get_default_expire();
+    }
+}
+
+public function get_post_type()
+{
+    if (is_home()) {
+        $type = "is_home";
+    } elseif (is_archive()) {
+        $type = "is_archive";
+    } elseif (is_singular()) {
+        $type = "is_singular";
+    } else {
+        $type = "other";
+    }
+
+    return $type;
+}
+
+public function get_cache($key)
+{
+    if (has_filter("nginxchampuru_get_cache")) {
+        return apply_filters(
+            'nginxchampuru_get_cache',
+            $key
+        );
+    } else {
+        $levels = preg_split("/:/", $this->get_cache_levels());
+        $path = array();
+        $path[] = $this->get_cache_dir();
+        $offset = 0;
+        foreach ($levels as $l) {
+            $offset = $offset + $l;
+            $path[] = substr($key, 0-$offset, $l);
+        }
+        $path[] = $key;
+        return join("/", $path);
+    }
+}
+
+public function get_cache_dir()
+{
+    return get_option("nginxchampuru-cache_dir", $this->cache_dir);
+}
+
+public function get_cache_key($url = null)
+{
+    if (!$url) {
+        $url = $this->get_the_url();
+    }
+    if (has_filter("nginxchampuru_get_reverse_proxy_key")) {
+        return apply_filters(
+            'nginxchampuru_get_reverse_proxy_key',
+            $url
+        );
+    } else {
+        return md5($url);
+    }
+}
+
+private function get_postid()
+{
+    $id = url_to_postid($this->get_the_url());
+    if (is_singular() && intval($id)) {
+        return $id;
+    } else {
+        return 0;
+    }
+}
+
+public function get_the_url()
+{
+    return apply_filters(
+        'nginxchampuru_get_the_url',
+        'http://'.$_SERVER["HTTP_HOST"].$_SERVER["REQUEST_URI"]
+    );
 }
 
 }
 
-?>
+// EOF
