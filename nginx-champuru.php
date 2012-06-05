@@ -4,7 +4,7 @@ Plugin Name: Nginx Cache Controller
 Author: Ninjax Team (Takayuki Miyauchi)
 Plugin URI: http://ninjax.cc/
 Description: Plugin for Nginx Reverse Proxy
-Version: 1.1.0
+Version: 1.1.2
 Author URI: http://ninjax.cc/
 Domain Path: /languages
 Text Domain: nginxchampuru
@@ -38,12 +38,20 @@ function __construct()
 {
     global $wpdb;
     $this->table = $wpdb->prefix.'nginxchampuru';
+    if (defined('NCC_CACHE_DIR') && file_exists(NCC_CACHE_DIR)) {
+        $this->cache_dir = NCC_CACHE_DIR;
+    }
     add_action('plugins_loaded',    array(&$this, 'plugins_loaded'));
 }
 
 public function is_enable_flush()
 {
     return get_option("nginxchampuru-enable_flush", 0);
+}
+
+public function add_last_modified()
+{
+    return $this->is_enable_flush() && get_option("nginxchampuru-add_last_modified", 0);
 }
 
 public function get_cache_levels()
@@ -123,10 +131,12 @@ private function flush_this()
     $url    = $params[0][0];
 
     $key    = $this->get_cache_key($url);
-    $cache  = $this->get_cache($key);
+    $caches = $this->get_cache($key, $url);
 
-    if (is_file($cache)) {
-        unlink($cache);
+    foreach ((array)$caches as $cache) {
+        if (is_file($cache)) {
+            unlink($cache);
+        }
     }
 
     global $wpdb;
@@ -216,30 +226,47 @@ public function get_post_type()
     return $type;
 }
 
-public function get_cache($key)
+public function get_cache($key, $url = null)
 {
     if (has_filter("nginxchampuru_get_cache")) {
+        if (!$url) {
+            $url = $this->get_the_url();
+        }
         return apply_filters(
             'nginxchampuru_get_cache',
-            $key
+            $key,
+            $url
         );
     } else {
-        $levels = preg_split("/:/", $this->get_cache_levels());
+        return $this->get_cache_file($key);
+    }
+}
+
+public function get_cache_file($keys)
+{
+    $caches = array();
+    $levels = preg_split("/:/", $this->get_cache_levels());
+    $cache_dir = $this->get_cache_dir();
+    foreach ((array)$keys as $key) {
         $path = array();
-        $path[] = $this->get_cache_dir();
+        $path[] = $cache_dir;
         $offset = 0;
         foreach ($levels as $l) {
             $offset = $offset + $l;
             $path[] = substr($key, 0-$offset, $l);
         }
         $path[] = $key;
-        return join("/", $path);
+        $caches[] = join("/", $path);
     }
+    return $caches;
 }
 
 public function get_cache_dir()
 {
-    return get_option("nginxchampuru-cache_dir", $this->cache_dir);
+    return
+        (defined('NCC_CACHE_DIR') && file_exists(NCC_CACHE_DIR))
+        ? NCC_CACHE_DIR
+        : get_option("nginxchampuru-cache_dir", $this->cache_dir);
 }
 
 public function get_cache_key($url = null)
