@@ -4,7 +4,7 @@ Plugin Name: Nginx Cache Controller
 Author: Ninjax Team (Takayuki Miyauchi)
 Plugin URI: http://ninjax.cc/
 Description: Plugin for Nginx Reverse Proxy
-Version: 1.1.2
+Version: 1.1.3
 Author URI: http://ninjax.cc/
 Domain Path: /languages
 Text Domain: nginxchampuru
@@ -174,13 +174,18 @@ private function flush_cache()
     $keys = $wpdb->get_col($sql);
     foreach ($keys as $key) {
         $cache = $this->get_cache($key);
-        if (is_file($cache)) {
-            unlink($cache);
+        if (is_array($cache)) {
+            foreach ($cache as $c) {
+                if (is_file($c)) {
+                    unlink($c);
+                }
+            }
         }
     }
 
-    $sql = "delete from `$this->table` where cache_key in ('".join("','", $keys)."')";
-    $wpdb->query($sql);
+    // ほとぼりが冷めた頃に削除
+    // $sql = "delete from `$this->table` where cache_key in ('".join("','", $keys)."')";
+    // $wpdb->query($sql);
 }
 
 public function activation()
