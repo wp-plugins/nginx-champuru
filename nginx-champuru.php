@@ -4,7 +4,7 @@ Plugin Name: Nginx Cache Controller
 Author: Ninjax Team (Takayuki Miyauchi)
 Plugin URI: http://ninjax.cc/
 Description: Plugin for Nginx Reverse Proxy
-Version: 1.1.5
+Version: 1.6.1
 Author URI: http://ninjax.cc/
 Domain Path: /languages
 Text Domain: nginxchampuru
@@ -34,8 +34,6 @@ private $expire = 86400;
 private $cache_dir = "/var/cache/nginx";
 private $cache_levels = "1:2";
 private $transient_timeout = 60;
-
-private $flush_urls = array();
 
 const OPTION_NAME_DB_VERSION = 'nginxchampuru-db_version';
 const OPTION_NAME_CACHE_EXPIRES = 'nginxchampuru-cache_expires';
@@ -106,8 +104,9 @@ public function plugins_loaded()
         dirname(plugin_basename(__FILE__)).'/languages'
     );
 
-    if ( version_compare($this->version, $this->db_version) )
+    if (version_compare($this->version, $this->db_version)) {
         $this->db_version = $this->alter_table($this->version, $this->db_version);
+    }
 }
 
 public function add()
@@ -115,9 +114,12 @@ public function add()
     if (is_admin()) {
         return;
     }
+	if ($this->get_expire() <= 0) {
+        return;
+	}
     global $wpdb;
     $sql = $wpdb->prepare(
-        "replace into `{$this->table}` values(%s, %d, %s, %s)",
+        "replace into `{$this->table}` values(%s, %d, %s, %s, null)",
         $this->get_cache_key(),
         $this->get_postid(),
         $this->get_post_type(),
@@ -131,9 +133,8 @@ public function transientExec($callback)
     if (!$this->is_enable_flush()) {
         return;
     }
-
     if (get_transient("nginxchampuru_flush")) {
-        return;
+        wp_die('Now romoving cache. Please try after.');
     } else {
         set_transient("nginxchampuru_flush", 1, $this->transient_timeout);
     }
@@ -149,11 +150,18 @@ private function flush_this()
 {
     $params = func_get_args();
     $url    = $params[0][0];
-    if ( empty($url) || array_search($url, $this->flush_urls) === FALSE )
+    if (empty($url)) {
         return;
+    }
 
-    $this->flush_urls[] = $url;
     do_action('nginxchampuru_flush_cache', $url);
+
+    // singular pages
+    $id = url_to_postid($url);
+    if ($id) {
+        $this->flush_cache(array('single', $id));
+        return;
+    }
 
     $key    = $this->get_cache_key($url);
     $caches = $this->get_cache($key, $url);
@@ -163,10 +171,9 @@ private function flush_this()
         }
     }
 
-	// ほとぼりが冷めた頃に消す
-    // global $wpdb;
-    // $sql = $wpdb->prepare("delete from `$this->table` where cache_key=%s", $key);
-    // $wpdb->query($sql);
+    global $wpdb;
+    $sql = $wpdb->prepare("delete from `$this->table` where cache_key=%s", $key);
+    $wpdb->query($sql);
 }
 
 private function flush_cache()
@@ -175,19 +182,25 @@ private function flush_cache()
     $mode   = $params[0][0];
     $id     = $params[0][1];
 
+    $expire_limit = date('Y-m-d H:i:s', time() - $this->get_max_expire());
+
     global $wpdb;
     if ($mode === "all") {
-        $sql = "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table`";
+        $sql = $wpdb->prepare("select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table` where `cache_saved` > %s",
+            $expire_limit
+        );
     } elseif ($mode === "single" && intval($id)) {
         $sql = $wpdb->prepare(
-            "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table` where cache_id=%d",
-            intval($id)
+            "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table` where `cache_id`=%d and cache_saved > %s",
+            intval($id),
+            $expire_limit
         );
     } elseif ($mode === 'almost' && intval($id)) {
         $sql = $wpdb->prepare(
             "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table`
-                where cache_id=%d or
-                cache_type in ('is_home', 'is_archive', 'other')",
+                where `cache_saved`> %s and (cache_id=%d or
+                cache_type in ('is_home', 'is_archive', 'other'))",
+            $expire_limit,
             intval($id)
         );
     } else {
@@ -195,23 +208,10 @@ private function flush_cache()
     }
 
     $keys = $wpdb->get_results($sql);
-    $urls = array();
     $purge_keys = array();
     foreach ($keys as $key) {
         $url = $key->cache_url;
-        if ( empty($url) && $key->cache_type === 'is_singular' ) {
-            $url = get_permalink($key->cache_id);
-            $sql = $wpdb->prepare(
-                "replace into `{$this->table}` values(%s, %d, %s, %s)",
-                $key->cache_key,
-                $key->cache_id,
-                $key->cache_type,
-                $url
-            );
-            $wpdb->query($sql);
-        }
-        if ( !empty($url) && array_search($url, $this->flush_urls) === FALSE ) {
-            $this->flush_urls[] = $url;
+        if ($url) {
             do_action('nginxchampuru_flush_cache', $url);
         }
         $caches = $this->get_cache($key->cache_key, $url);
@@ -223,9 +223,12 @@ private function flush_cache()
         $purge_keys[] = $key->cache_key;
     }
 
-	// ほとぼりが冷めた頃に消す
-    // $sql = "delete from `$this->table` where cache_key in ('".join("','", $purge_keys)."')";
-    // $wpdb->query($sql);
+    if ($mode === 'all') {
+        $sql = "delete from `$this->table`";
+    } else {
+        $sql = "delete from `$this->table` where cache_key in ('".join("','", $purge_keys)."')";
+    }
+    $wpdb->query($sql);
 }
 
 public function activation()
@@ -237,13 +240,41 @@ public function activation()
             `cache_id` bigint(20) unsigned default 0 not null,
             `cache_type` varchar(11) not null,
             `cache_url` varchar(256),
+            `cache_saved` timestamp default current_timestamp not null,
             primary key (`cache_key`),
             key `cache_id` (`cache_id`),
+            key `cache_saved`(`cache_saved`),
+            key `cache_url`(`cache_url`),
             key `cache_type`(`cache_type`)
             );";
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
 	    update_option(self::OPTION_NAME_DB_VERSION, $this->version);
+    }
+
+    $this->add_caps();
+}
+
+private function add_caps()
+{
+    if (!function_exists('get_role'))
+        return;
+
+    $role = get_role('administrator');
+    if ($role && !is_wp_error($role)) {
+        $role->add_cap('flush_cache_single');
+        $role->add_cap('flush_cache_all');
+    }
+
+    $role = get_role('editor');
+    if ($role && !is_wp_error($role)) {
+        $role->add_cap('flush_cache_single');
+        $role->add_cap('flush_cache_all');
+    }
+
+    $role = get_role('author');
+    if ($role && !is_wp_error($role)) {
+        $role->add_cap('flush_cache_single');
     }
 }
 
@@ -256,11 +287,20 @@ private function alter_table($version, $db_version)
     }
 
     switch (true) {
-        case version_compare('1.1.5', $db_version):
+        case (version_compare('1.1.5', $db_version) > 0):
             $sql = "ALTER TABLE `{$this->table}` ADD COLUMN `cache_url` varchar(256);";
             $wpdb->query($sql);
-            update_option(self::OPTION_NAME_DB_VERSION, $version);
-            break;
+        case (version_compare('1.2.1', $db_version) > 0):
+            $sql = "ALTER TABLE `{$this->table}` ADD COLUMN `cache_saved` timestamp default current_timestamp not null;";
+            $wpdb->query($sql);
+            $sql = "ALTER TABLE `{$this->table}` ADD INDEX `cache_saved`(`cache_saved`);";
+            $wpdb->query($sql);
+            $sql = "ALTER TABLE `{$this->table}` ADD INDEX `cache_url`(`cache_url`);";
+            $wpdb->query($sql);
+            $sql = "update `{$this->table}` set `cache_saved` = current_timestamp";
+            $wpdb->query($sql);
+        case (version_compare('1.4.2', $db_version) > 0):
+            $this->add_caps();
         default:
             update_option(self::OPTION_NAME_DB_VERSION, $version);
             break;
@@ -268,6 +308,15 @@ private function alter_table($version, $db_version)
     return $version;
 }
 
+private function get_max_expire()
+{
+    $expires = get_option(self::OPTION_NAME_CACHE_EXPIRES);
+    $max = max(array_values($expires));
+    if (!$max) {
+        $max = $this->get_default_expire();
+    }
+    return $max;
+}
 
 public function get_expire()
 {
@@ -365,10 +414,9 @@ private function get_postid()
 
 public function get_the_url()
 {
-    return apply_filters(
-        'nginxchampuru_get_the_url',
-        'http://'.$_SERVER["HTTP_HOST"].$_SERVER["REQUEST_URI"]
-    );
+    $url = preg_replace('#(https?)://([^/]+)/.*$#i', '$1://$2', home_url());
+    $url .= isset($_SERVER["REQUEST_URI"]) ? $_SERVER["REQUEST_URI"] : '/';
+    return apply_filters('nginxchampuru_get_the_url', $url);
 }
 
 }
