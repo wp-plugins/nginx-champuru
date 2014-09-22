@@ -3,8 +3,8 @@ Contributors: miyauchi, wokamoto
 Donate link: http://ninjax.cc/
 Tags: nginx, reverse proxy, cache
 Requires at least: 3.4
-Tested up to: 3.9
-Stable tag: 2.5.0
+Tested up to: 4.0
+Stable tag: 2.8.0
 
 Provides some functions of controlling Nginx proxy server cache.
 
@@ -48,7 +48,7 @@ See help.
 
 = Contributor =
 
-* [Ninjax Team](http://ninjax.cc/) 
+* [Ninjax Team](http://ninjax.cc/)
 * [miyauchi](http://profiles.wordpress.org/miyauchi/)
 * [wokamoto](http://profiles.wordpress.org/wokamoto/)
 * [gatespace](http://profiles.wordpress.org/gatespace/)
@@ -76,7 +76,7 @@ Setting cache directory for reverse proxy.
 
 `proxy_cache_path  /var/cache/nginx levels=1:2 keys_zone=czone:4m max_size=50m inactive=120m;`
 
-* The default path is /var/cache/nginx. 
+* The default path is /var/cache/nginx.
 * The default value of levels is 1:2.
 * You can change the cache path at the admin panel.
 
@@ -94,6 +94,22 @@ Setting the key for the reverse cache proxy.
 
 
 == Changelog ==
+
+= 2.7.0 =
+
+* Don't load wp-cron.php when DISABLE_WP_CRON is defined. 
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.7.0...2.8.0
+
+= 2.7.0 =
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.6.0...2.7.0
+
+= 2.6.0 =
+
+* refactoring
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.5.0...2.6.0
 
 = 2.5.0 =
 
