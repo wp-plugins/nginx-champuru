@@ -4,7 +4,7 @@ Donate link: http://ninjax.cc/
 Tags: nginx, reverse proxy, cache
 Requires at least: 3.4
 Tested up to: 4.0
-Stable tag: 2.9.0
+Stable tag: 3.0.0
 
 Provides some functions of controlling Nginx proxy server cache.
 
@@ -36,7 +36,9 @@ Flush all proxy caches.
 `wp nginx flush`
 
 Show list of all proxy caches.
-`wp nginx list`
+`wp nginx list --format=csv`
+
+`wp nginx list --format=json`
 
 See help.
 `wp help nginx`
@@ -94,6 +96,12 @@ Setting the key for the reverse cache proxy.
 
 
 == Changelog ==
+
+= 3.0.0 =
+
+* list sub command supported csv and json
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.9.0...3.0.0
 
 = 2.9.0 =
 
