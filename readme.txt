@@ -3,8 +3,8 @@ Contributors: miyauchi, wokamoto
 Donate link: http://ninjax.cc/
 Tags: nginx, reverse proxy, cache
 Requires at least: 3.4
-Tested up to: 3.9
-Stable tag: 2.5.0
+Tested up to: 4.0
+Stable tag: 3.0.0
 
 Provides some functions of controlling Nginx proxy server cache.
 
@@ -36,7 +36,9 @@ Flush all proxy caches.
 `wp nginx flush`
 
 Show list of all proxy caches.
-`wp nginx list`
+`wp nginx list --format=csv`
+
+`wp nginx list --format=json`
 
 See help.
 `wp help nginx`
@@ -48,7 +50,7 @@ See help.
 
 = Contributor =
 
-* [Ninjax Team](http://ninjax.cc/) 
+* [Ninjax Team](http://ninjax.cc/)
 * [miyauchi](http://profiles.wordpress.org/miyauchi/)
 * [wokamoto](http://profiles.wordpress.org/wokamoto/)
 * [gatespace](http://profiles.wordpress.org/gatespace/)
@@ -76,7 +78,7 @@ Setting cache directory for reverse proxy.
 
 `proxy_cache_path  /var/cache/nginx levels=1:2 keys_zone=czone:4m max_size=50m inactive=120m;`
 
-* The default path is /var/cache/nginx. 
+* The default path is /var/cache/nginx.
 * The default value of levels is 1:2.
 * You can change the cache path at the admin panel.
 
@@ -94,6 +96,34 @@ Setting the key for the reverse cache proxy.
 
 
 == Changelog ==
+
+= 3.0.0 =
+
+* list sub command supported csv and json
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.9.0...3.0.0
+
+= 2.9.0 =
+
+* Add feed features.
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.8.0...2.9.0
+
+= 2.8.0 =
+
+* Don't load wp-cron.php when DISABLE_WP_CRON is defined.
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.7.0...2.8.0
+
+= 2.7.0 =
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.6.0...2.7.0
+
+= 2.6.0 =
+
+* refactoring
+
+https://github.com/megumiteam/nginx-cache-controller/compare/2.5.0...2.6.0
 
 = 2.5.0 =
 
@@ -160,4 +190,3 @@ The author must acknowledge the thing that the operation guarantee and the suppo
 == Contact ==
 
 * https://github.com/miya0001/nginx-champuru
-

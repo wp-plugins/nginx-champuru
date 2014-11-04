@@ -2,9 +2,9 @@
 /*
 Plugin Name: Nginx Cache Controller
 Author: Ninjax Team (Takayuki Miyauchi)
-Plugin URI: http://ninjax.cc/
+Plugin URI: https://github.com/megumiteam/nginx-cache-controller
 Description: Plugin for Nginx Reverse Proxy
-Version: 2.5.0
+Version: 3.0.0
 Author URI: http://ninjax.cc/
 Domain Path: /languages
 Text Domain: nginxchampuru
@@ -14,15 +14,21 @@ if ( defined('WP_CLI') && WP_CLI ) {
 	require_once(dirname(__FILE__)."/includes/wp-cli.php");
 }
 
-$nginxchampuru = new NginxChampuru();
+$nginxchampuru = NginxChampuru::get_instance();
+$nginxchampuru->add_hook();
 register_activation_hook (__FILE__, array($nginxchampuru, 'activation'));
 
 require_once(dirname(__FILE__)."/includes/caching.class.php");
-new NginxChampuru_Caching();
+$nginxchampuru_cache = NginxChampuru_Caching::get_instance();
+$nginxchampuru_cache->add_hook();
+
 require_once(dirname(__FILE__)."/includes/flush-cache.class.php");
-new NginxChampuru_FlushCache();
+$nginxchampuru_flushcache = NginxChampuru_FlushCache::get_instance();
+$nginxchampuru_flushcache->add_hook();
+
 require_once(dirname(__FILE__)."/includes/admin.class.php");
-new NginxChampuru_Admin();
+$nginxchampuru_admin = NginxChampuru_Admin::get_instance();
+$nginxchampuru_admin->add_hook();
 
 
 define("NGINX_CACHE_CONTROLER_URL", plugins_url('', __FILE__));
@@ -48,14 +54,27 @@ private $method =array(
     'comment' => 'single',
 );
 
-function __construct()
+private static $instance;
+
+private function __construct() {}
+
+public static function get_instance()
+{
+    if( !isset( self::$instance ) ) {
+        $c = __CLASS__;
+        self::$instance = new $c();
+    }
+    return self::$instance;
+}
+
+public function add_hook()
 {
     global $wpdb;
     $this->table = $wpdb->prefix.'nginxchampuru';
     if (defined('NCC_CACHE_DIR') && file_exists(NCC_CACHE_DIR)) {
         $this->cache_dir = NCC_CACHE_DIR;
     }
-    add_action('plugins_loaded',    array(&$this, 'plugins_loaded'));
+    add_action('plugins_loaded',    array($this, 'plugins_loaded'));
 
     $data = get_file_data( __FILE__, array( 'version' => 'Version' ) );
     $this->version = $data['version'];
@@ -122,9 +141,12 @@ public function add()
     if (is_admin()) {
         return;
     }
-	if ($this->get_expire() <= 0) {
+    if (!$this->is_enable_flush()) {
         return;
-	}
+    }
+    if ($this->get_expire() <= 0) {
+        return;
+    }
     global $wpdb;
     $sql = $wpdb->prepare(
         "replace into `{$this->table}` values(%s, %d, %s, %s, CURRENT_TIMESTAMP)",
@@ -142,7 +164,7 @@ public function transientExec($callback)
         return;
     }
     if (get_transient("nginxchampuru_flush")) {
-        wp_die('Now romoving cache. Please try after.');
+        wp_die('Now removing cache. Please try after.');
     } else {
         set_transient("nginxchampuru_flush", 1, $this->transient_timeout);
     }
@@ -160,7 +182,7 @@ public function get_cached_objects()
 
     $expire_limit = date('Y-m-d H:i:s', time() - $this->get_max_expire());
 
-    $sql = $wpdb->prepare("select distinct `cache_id`, ifnull(`cache_url`,\"\") as `cache_url`, `cache_saved` from `$this->table` where `cache_saved` > %s",
+    $sql = $wpdb->prepare("select distinct `cache_id`, `cache_type` as post_type, ifnull(`cache_url`,\"\") as `cache_url`, `cache_saved` from `$this->table` where `cache_saved` > %s",
         $expire_limit
     );
 
@@ -212,7 +234,7 @@ private function flush_cache()
         );
     } elseif ($mode === "single" && intval($id)) {
         $sql = $wpdb->prepare(
-            "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table` where `cache_id`=%d and cache_saved > %s",
+            "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table` where (`cache_id`=%d and cache_saved > %s) or (`cache_type`='is_feed')",
             intval($id),
             $expire_limit
         );
@@ -220,7 +242,7 @@ private function flush_cache()
         $sql = $wpdb->prepare(
             "select distinct `cache_key`, `cache_id`, `cache_type`, ifnull(`cache_url`,\"\") as `cache_url` from `$this->table`
                 where `cache_saved`> %s and (cache_id=%d or
-                cache_type in ('is_home', 'is_archive', 'other'))",
+                cache_type in ('is_home', 'is_archive', 'is_feed', 'other'))",
             $expire_limit,
             intval($id)
         );
@@ -331,8 +353,13 @@ private function alter_table($version, $db_version)
 
 private function get_max_expire()
 {
+    $max = 0;
+
     $expires = get_option(self::OPTION_NAME_CACHE_EXPIRES);
-    $max = max(array_values($expires));
+    if (is_array($expires) && is_array(array_values($expires))) {
+        $max = max(array_values($expires));
+    }
+
     if (!$max) {
         $max = $this->get_default_expire();
     }
@@ -358,6 +385,8 @@ public function get_post_type()
         $type = "is_archive";
     } elseif (is_singular()) {
         $type = "is_singular";
+    } elseif (is_feed()) {
+        $type = "is_feed";
     } else {
         $type = "other";
     }
