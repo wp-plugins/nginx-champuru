@@ -6,11 +6,24 @@ class NginxChampuru_Admin {
 private $default_cache_params = array();
 private $methods = array();
 
-function __construct()
+private static $instance;
+
+private function __construct() {}
+
+public static function get_instance()
 {
-    add_action("admin_bar_menu", array(&$this, "admin_bar_menu"), 9999);
-    add_action("admin_menu", array(&$this, "admin_menu"));
-    add_filter('plugin_row_meta',   array(&$this, 'plugin_row_meta'), 10, 2);
+    if( !isset( self::$instance ) ) {
+        $c = __CLASS__;
+        self::$instance = new $c();    
+    }
+    return self::$instance;
+}
+
+public function add_hook()
+{
+    add_action("admin_bar_menu", array($this, "admin_bar_menu"), 9999);
+    add_action("admin_menu", array($this, "admin_menu"));
+    add_filter('plugin_row_meta',   array($this, 'plugin_row_meta'), 10, 2);
 }
 
 public function plugin_row_meta($links, $file)
@@ -146,6 +159,7 @@ public function admin_menu()
         'is_home'     => __("Home", "nginxchampuru"),
         'is_archive'  => __("Archives", "nginxchampuru"),
         'is_singular' => __("Singular", "nginxchampuru"),
+        'is_feed'     => __("Feed", "nginxchampuru"),
         'other'       => __("Other", "nginxchampuru"),
     );
 
